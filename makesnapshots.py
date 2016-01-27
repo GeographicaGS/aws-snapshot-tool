@@ -29,6 +29,16 @@ import sys
 import logging
 from config import config
 
+def getEnvironmentKey(environment,key):
+    if environment==None:
+	return config.get(key)
+
+    config_env = config[environment]
+    v = config_env.get(key)
+    if key in config_env:
+        return config_env[key]
+    else:
+        return config.get(key)
 
 if (len(sys.argv) < 2):
     print('Please add a positional argument: day, week or month.')
@@ -46,8 +56,31 @@ else:
     else:
         print('Please use the parameter day, week or month')
         quit()
+if (len(sys.argv) == 3): 
+    # Config environment
+    environment = sys.argv[2]
+    if environment not in config:
+	print('Environment %s not found',environment)
+	quit()
+  
+else:
+    environment = None
 
-# Message to return result via SNS
+aws_access_key = getEnvironmentKey(environment,'aws_access_key')
+aws_secret_key = getEnvironmentKey(environment,'aws_secret_key')
+ec2_region_name = getEnvironmentKey(environment,'ec2_region_name')
+ec2_region_endpoint = getEnvironmentKey(environment,'ec2_region_endpoint')
+sns_arn = getEnvironmentKey(environment,'arn')
+proxyHost = getEnvironmentKey(environment,'proxyHost')
+proxyPort = getEnvironmentKey(environment,'proxyPort')
+# Number of snapshots to keep
+keep_week = getEnvironmentKey(environment,'keep_week')
+keep_day = getEnvironmentKey(environment,'keep_day');
+keep_month = getEnvironmentKey(environment,'keep_month')
+tag_name = getEnvironmentKey(environment,'tag_name')
+tag_value = getEnvironmentKey(environment,'tag_value')
+log_file = getEnvironmentKey(environment,'log_file')
+
 message = ""
 errmsg = ""
 
@@ -60,7 +93,7 @@ count_errors = 0
 deletelist = []
 
 # Setup logging
-logging.basicConfig(filename=config['log_file'], level=logging.INFO)
+logging.basicConfig(filename=log_file, level=logging.INFO)
 start_message = 'Started taking %(period)s snapshots at %(date)s' % {
     'period': period,
     'date': datetime.today().strftime('%d-%m-%Y %H:%M:%S')
@@ -68,21 +101,8 @@ start_message = 'Started taking %(period)s snapshots at %(date)s' % {
 message += start_message + "\n\n"
 logging.info(start_message)
 
-# Get settings from config.py
-aws_access_key = config['aws_access_key']
-aws_secret_key = config['aws_secret_key']
-ec2_region_name = config['ec2_region_name']
-ec2_region_endpoint = config['ec2_region_endpoint']
-sns_arn = config.get('arn')
-proxyHost = config.get('proxyHost')
-proxyPort = config.get('proxyPort')
-
 region = RegionInfo(name=ec2_region_name, endpoint=ec2_region_endpoint)
 
-# Number of snapshots to keep
-keep_week = config['keep_week']
-keep_day = config['keep_day']
-keep_month = config['keep_month']
 count_success = 0
 count_total = 0
 
@@ -100,6 +120,8 @@ else:
     # using roles
     if aws_access_key:
         conn = EC2Connection(aws_access_key, aws_secret_key, region=region)
+	print "Connected"
+	print region
     else:
         conn = EC2Connection(region=region)
 
@@ -143,7 +165,7 @@ def set_resource_tags(resource, tags):
 
 # Get all the volumes that match the tag criteria
 print 'Finding volumes that match the requested tag ({ "tag:%(tag_name)s": "%(tag_value)s" })' % config
-vols = conn.get_all_volumes(filters={ 'tag:' + config['tag_name']: config['tag_value'] })
+vols = conn.get_all_volumes(filters={ 'tag:' + tag_name: tag_value })
 
 for vol in vols:
     try:
@@ -208,7 +230,9 @@ for vol in vols:
         time.sleep(3)
     except:
         print "Unexpected error:", sys.exc_info()[0]
-        logging.error('Error in processing volume with id: ' + vol.id)
+        import traceback 
+	traceback.print_exc()
+	logging.error('Error in processing volume with id: ' + vol.id)
         errmsg += 'Error in processing volume with id: ' + vol.id
         count_errors += 1
     else:
@@ -230,9 +254,12 @@ print result
 
 # SNS reporting
 if sns_arn:
+    msg_subject = 'Finished AWS snapshotting'
+    if environment:
+	msg_subject += ' [' + environment + ']'
     if errmsg:
         sns.publish(sns_arn, 'Error in processing volumes: ' + errmsg, 'Error with AWS Snapshot')
-    sns.publish(sns_arn, message, 'Finished AWS snapshotting')
+    sns.publish(sns_arn, message, msg_subject)
 
 logging.info(result)
 
